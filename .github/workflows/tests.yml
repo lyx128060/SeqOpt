@@ -1,0 +1,81 @@
+name: tests
+
+# Offline test suite: no cluster, no HMMER build, no reference databases.
+# The 37 tests requiring a real HMMER 3.4 source tree are skipped with an
+# explicit reason; `scripts/setup_hmmer.sh` enables them but is not run here
+# because it downloads and compiles a ~98 MB third-party source tree.
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Show interpreter version
+        run: python -c "import sys, pydantic; print(sys.version); print('pydantic', pydantic.VERSION)"
+
+      - name: Validate example proposals against component contracts
+        run: python examples/validate_examples.py
+
+      - name: Shell-check the HMMER setup script
+        run: bash -n scripts/setup_hmmer.sh
+
+      - name: Run test suite
+        env:
+          # Keep the suite off the 60.9 GB UniRef90 default. The variable points
+          # at a file that will not exist on CI, so database-dependent tests are
+          # skipped instead of hashing a huge file that is not here.
+          SEQALIGN_TEST_UNIREF_DB: /nonexistent/uniprot_sprot.fasta
+        run: python -m pytest tests/ -q -p no:cacheprovider
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fail if credentials or absolute site paths are committed
+        run: |
+          set -euo pipefail
+          echo "Scanning tracked files for secrets and site-specific paths..."
+
+          # 1. Credentials. Placeholders such as "your-api-key-here" must not trip
+          #    this, so match on real-looking key material only.
+          if git grep -nEI 'sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY'; then
+            echo "::error::A credential-like string was found in a tracked file."
+            exit 1
+          fi
+
+          # 2. Site-specific absolute paths, in product code only.
+          #    Markdown is excluded because the docs legitimately explain the
+          #    upstream deployment convention (`/shared/<user>`), and tests are
+          #    excluded because they assert on that mapping using the synthetic
+          #    `/shared/alice` fixture. Both are intentional, not leaks.
+          if git grep -nEI '/shared/[a-z]+/|/_conda/|/public/home/' -- . \
+               ':!*.md' ':!.github/' ':!tests/'; then
+            echo "::error::A site-specific absolute path was found in a tracked source file."
+            exit 1
+          fi
+
+          echo "No credentials or site-specific paths found."

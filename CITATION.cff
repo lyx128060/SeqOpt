@@ -1,0 +1,51 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below. It is an improved version of a fork of EvoMaster; please also cite the upstream framework."
+title: "SeqOpt: an agentic C-source optimization loop for HMMER jackhmmer with paired-measurement acceptance"
+version: 0.1.0
+license: Apache-2.0
+type: software
+abstract: >-
+  An optimization loop in which a language-model agent proposes patches to the C
+  sources of HMMER's jackhmmer iterative search. Every candidate is screened in a
+  two-stage evaluation (smoke then full) on a fixed query set against UniRef90
+  and scored against the SCOPe lineage under hard TP/FP non-regression gates.
+  Acceptance decisions are backed by a comparability fingerprint, paired
+  interleaved re-measurement of the current best, a zero-effect noise-floor
+  calibration, and decoy probes that are known to add only work. This repository
+  also documents one verified case in which such a decoy probe was accepted as a
+  speedup, which is recorded as a known limitation rather than a result.
+keywords:
+  - AI for Science
+  - protein sequence search
+  - HMMER
+  - jackhmmer
+  - profile hidden Markov models
+  - large language model agent
+  - automated algorithm optimization
+  - measurement reliability
+  - reproducible benchmarking
+authors:
+  - family-names: "Li"
+    given-names: "Yanxi"
+    affiliation: "Shanghai Jiao Tong University"
+# TODO(author): confirm and add a contact email, e.g.
+#   email: "you@example.edu"
+# It is intentionally omitted rather than guessed.
+repository-code: "https://github.com/lyx128060/SeqOpt"
+references:
+  - type: software
+    title: "EvoMaster: A Foundational Auto-Research Agent Framework for Agentic Science at Scale"
+    notes: "Upstream framework this project is an improved version of"
+    url: "https://github.com/sjtu-sai-agents/EvoMaster"
+    license: Apache-2.0
+  - type: article
+    title: "Accelerated Profile HMM Searches"
+    authors:
+      - family-names: "Eddy"
+        given-names: "Sean R."
+    journal: "PLoS Computational Biology"
+    volume: 7
+    issue: 10
+    start: e1002195
+    year: 2011
+    doi: "10.1371/journal.pcbi.1002195"

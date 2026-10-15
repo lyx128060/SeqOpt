@@ -1,0 +1,16 @@
+{
+  "_note": "Paths are basenames only: the absolute location is host-specific. The sha256 fields are the load-bearing provenance and are unchanged.",
+  "astral_db": "astral-scopedom-seqres-sel-gs-bib-40-2.08.fa",
+  "astral_sha256": "7bb428eb4a2fe6d146f114da51a0d17f04776e5cc6bd3b631a3a0d66a0445f16",
+  "query_count": 5,
+  "query_ids": [
+    "d4mt2a_",
+    "d2r85a1",
+    "d2b5xa1",
+    "d3wp4a_",
+    "d1u3da1"
+  ],
+  "scop_sha256": "979eceafbc2cb8c50a6549d156d888478a43003e8f9e21e1940d11bcf3d728ca",
+  "scop_txt": "dir.cla.scope.2.08-stable.txt",
+  "seed": 996
+}

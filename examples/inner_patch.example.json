@@ -1,0 +1,13 @@
+{
+  "component_name": "pipeline_flow",
+  "target_function": "p7_evo_align_Run",
+  "algorithm_change": "Track how many times the per-worker pipeline entry point has been entered, so a candidate optimization can later branch on warm/cold state. The decision surface is the pipeline entry state, not a scoring threshold.",
+  "speed_mechanism": "cache",
+  "quality_preservation_argument": "The added field is a counter only. The call into p7_evo_align_stock_Run and every score vector are untouched, so the exact stock fallback still handles all comparison work.",
+  "exact_fallback_strategy": "p7_evo_align_stock_Run remains the unconditional implementation for this entry point; if the counter is never read, behaviour is byte-for-byte the stock path.",
+  "rationale": "Example proposal used to exercise the proposal -> static verify -> apply protocol. It computes nothing and is not claimed to improve anything.",
+  "expected_metric_effect": "None claimed. This is a structurally valid patch, not a result.",
+  "risk_notes": "Struct layout change must stay consistent with the Create/Reuse/Destroy pair; a mismatch would be a memory error caught at build or smoke time, not silently.",
+  "unified_diff": "--- a/src/p7_evo_align.c\n+++ b/src/p7_evo_align.c\n@@ -13,7 +13,9 @@\n #include \"p7_evo_align.h\"\n \n struct p7_evo_align_s {\n-  int reserved;\n+  int reserved;\n+  /* Number of times this worker has entered the comparison island. */\n+  long invocation_count;\n };\n \n P7_EVO_ALIGN *\n@@ -41,6 +43,7 @@\n                  const ESL_SQ *sq, const ESL_SQ *ntsq,\n                  P7_TOPHITS *hitlist)\n {\n   (void) state;\n+  if (state != NULL) state->invocation_count++;\n   return p7_evo_align_stock_Run(pli, om, bg, sq, ntsq, hitlist);\n }\n",
+  "_comment": "EXAMPLE ONLY. The diff context matches the stock p7_evo_align.c produced by patches/0001-expose-optimization-islands.patch, so it applies cleanly. It is a no-op placeholder, NOT an optimization, and NO speedup is claimed."
+}

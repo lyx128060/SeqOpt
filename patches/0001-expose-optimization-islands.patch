@@ -1,0 +1,771 @@
+--- a/src/hmmer.h
++++ b/src/hmmer.h
+@@ -1184,6 +1184,9 @@
+   P7_OMX     *fwd;		/* full Fwd matrix for domain envelopes     */
+   P7_OMX     *bck;		/* full Bck matrix for domain envelopes     */
+ 
++  /* Per-worker state for the agent-editable comparison algorithm. */
++  struct p7_evo_align_s *evo_align;
++
+   /* Domain postprocessing                                                  */
+   ESL_RANDOMNESS *r;		/* random number generator                  */
+   int             do_reseeding; /* TRUE: reseed for reproducible results    */
+@@ -1816,4 +1819,3 @@
+ 
+ #endif /*P7_HMMERH_INCLUDED*/
+ 
+-
+--- a/src/impl_neon/mpi.c
++++ b/src/impl_neon/mpi.c
+@@ -127,12 +127,14 @@
+   int   Q4  = p7O_NQF(om->M);
+   int   Q8  = p7O_NQW(om->M);
+   int   Q16 = p7O_NQB(om->M);
++  int   Q16x = Q16 + p7O_EXTRA_SB;
+   int vsz = sizeof(int8x16_t);
+ 
+   /* MSV Filter information */
+   if (MPI_Pack_size(5,          MPI_CHAR, comm, &sz) != 0) ESL_XEXCEPTION(eslESYS, "pack size failed");   n += sz;
+   if (MPI_Pack_size(1,         MPI_FLOAT, comm, &sz) != 0) ESL_XEXCEPTION(eslESYS, "pack size failed");   n += sz;
+   if (MPI_Pack_size(vsz*Q16,    MPI_CHAR, comm, &sz) != 0) ESL_XEXCEPTION(eslESYS, "pack size failed");   n += (K*sz);
++  if (MPI_Pack_size(vsz*Q16x,   MPI_CHAR, comm, &sz) != 0) ESL_XEXCEPTION(eslESYS, "pack size failed");   n += (K*sz);
+ 
+   /* Viterbi Filter information */
+   if (MPI_Pack_size(1,         MPI_SHORT, comm, &sz) != 0) ESL_XEXCEPTION(eslESYS, "pack size failed");   n += ((p7O_NXSTATES*p7O_NXTRANS+2)*sz);
+@@ -162,7 +164,7 @@
+   if (MPI_Pack_size(cnt,       MPI_FLOAT, comm, &sz) != 0) ESL_XEXCEPTION(eslESYS, "pack size failed");   n += sz;
+ 
+   /* current model size */
+-  if (MPI_Pack_size(4,           MPI_INT, comm, &sz) != 0) ESL_XEXCEPTION(eslESYS, "pack size failed");   n += sz;
++  if (MPI_Pack_size(5,           MPI_INT, comm, &sz) != 0) ESL_XEXCEPTION(eslESYS, "pack size failed");   n += sz;
+   if (MPI_Pack_size(1,         MPI_FLOAT, comm, &sz) != 0) ESL_XEXCEPTION(eslESYS, "pack size failed");   n += sz;
+ 
+   *ret_n = n;
+@@ -210,12 +212,14 @@
+   int   Q4    = p7O_NQF(om->M);
+   int   Q8    = p7O_NQW(om->M);
+   int   Q16   = p7O_NQB(om->M);
++  int   Q16x  = Q16 + p7O_EXTRA_SB;
+   int vsz = sizeof(int8x16_t);
+ 
+   /* model configuration */
+   if (MPI_Pack(&om->M,            1,                      MPI_INT, buf, n, pos, comm) != 0) ESL_EXCEPTION(eslESYS, "pack failed");
+   if (MPI_Pack(&atype,            1,                      MPI_INT, buf, n, pos, comm) != 0) ESL_EXCEPTION(eslESYS, "pack failed");
+   if (MPI_Pack(&om->L,            1,                      MPI_INT, buf, n, pos, comm) != 0) ESL_EXCEPTION(eslESYS, "pack failed");
++  if (MPI_Pack(&om->max_length,   1,                      MPI_INT, buf, n, pos, comm) != 0) ESL_EXCEPTION(eslESYS, "pack failed");
+   if (MPI_Pack(&om->mode,         1,                      MPI_INT, buf, n, pos, comm) != 0) ESL_EXCEPTION(eslESYS, "pack failed");
+   if (MPI_Pack(&om->nj,           1,                    MPI_FLOAT, buf, n, pos, comm) != 0) ESL_EXCEPTION(eslESYS, "pack failed");
+ 
+@@ -228,6 +232,8 @@
+   if (MPI_Pack(&om->bias_b,       1,                     MPI_CHAR, buf, n, pos, comm) != 0) ESL_EXCEPTION(eslESYS, "pack failed");
+   for (x = 0; x < K; x++)
+     if (MPI_Pack( om->rbv[x],     vsz*Q16,               MPI_CHAR, buf, n, pos, comm) != 0) ESL_EXCEPTION(eslESYS, "pack failed");
++  for (x = 0; x < K; x++)
++    if (MPI_Pack( om->sbv[x],     vsz*Q16x,              MPI_CHAR, buf, n, pos, comm) != 0) ESL_EXCEPTION(eslESYS, "pack failed");
+ 
+   /* Viterbi Filter information */
+   if (MPI_Pack(&om->scale_w,      1,                    MPI_FLOAT, buf, n, pos, comm) != 0) ESL_EXCEPTION(eslESYS, "pack failed");
+@@ -337,7 +343,7 @@
+   int   len;
+   int   x;
+ 
+-  int   Q4, Q8, Q16;
++  int   Q4, Q8, Q16, Q16x;
+   int vsz = sizeof(int8x16_t);
+ 
+   P7_OPROFILE *om = NULL;
+@@ -355,6 +361,7 @@
+   Q4  = p7O_NQF(M);
+   Q8  = p7O_NQW(M);
+   Q16 = p7O_NQB(M);
++  Q16x = Q16 + p7O_EXTRA_SB;
+ 
+   if ((om = p7_oprofile_Create(M, *abc)) == NULL) { status = eslEMEM; goto ERROR;    }
+   om->M = M;
+@@ -363,6 +370,7 @@
+ 
+   /* model configuration */
+   if (MPI_Unpack(buf, n, pos, &om->L,            1,                      MPI_INT, comm) != 0) ESL_EXCEPTION(eslESYS, "mpi unpack failed");
++  if (MPI_Unpack(buf, n, pos, &om->max_length,   1,                      MPI_INT, comm) != 0) ESL_EXCEPTION(eslESYS, "mpi unpack failed");
+   if (MPI_Unpack(buf, n, pos, &om->mode,         1,                      MPI_INT, comm) != 0) ESL_EXCEPTION(eslESYS, "mpi unpack failed");
+   if (MPI_Unpack(buf, n, pos, &om->nj,           1,                    MPI_FLOAT, comm) != 0) ESL_EXCEPTION(eslESYS, "mpi unpack failed");
+ 
+@@ -375,6 +383,8 @@
+   if (MPI_Unpack(buf, n, pos, &om->bias_b,       1,                     MPI_CHAR, comm) != 0) ESL_EXCEPTION(eslESYS, "mpi unpack failed");
+   for (x = 0; x < K; x++)
+     if (MPI_Unpack(buf, n, pos,  om->rbv[x],     vsz*Q16,               MPI_CHAR, comm) != 0) ESL_EXCEPTION(eslESYS, "mpi unpack failed");
++  for (x = 0; x < K; x++)
++    if (MPI_Unpack(buf, n, pos,  om->sbv[x],     vsz*Q16x,              MPI_CHAR, comm) != 0) ESL_EXCEPTION(eslESYS, "mpi unpack failed");
+ 
+   /* Viterbi Filter information */
+   if (MPI_Unpack(buf, n, pos, &om->scale_w,      1,                    MPI_FLOAT, comm) != 0) ESL_EXCEPTION(eslESYS, "mpi unpack failed");
+@@ -779,4 +789,3 @@
+ #endif
+ #endif /*HMMER_MPI*/
+ 
+-
+--- a/src/impl_neon/p7_oprofile.c
++++ b/src/impl_neon/p7_oprofile.c
+@@ -1808,6 +1808,7 @@
+   int Q4  = p7O_NQF(om1->M);
+   int Q8  = p7O_NQW(om1->M);
+   int Q16 = p7O_NQB(om1->M);
++  int Q16x = Q16 + p7O_EXTRA_SB;
+   int q, r, x, y;
+   union { uint8x16_t  v; uint8_t c[16]; } a16, b16;
+   union { int16x8_t   v; int16_t w[8];  } a8,  b8;
+@@ -1816,6 +1817,7 @@
+   if (om1->mode      != om2->mode)      ESL_FAIL(eslFAIL, errmsg, "comparison failed: mode");
+   if (om1->L         != om2->L)         ESL_FAIL(eslFAIL, errmsg, "comparison failed: L");
+   if (om1->M         != om2->M)         ESL_FAIL(eslFAIL, errmsg, "comparison failed: M");
++  if (om1->max_length != om2->max_length) ESL_FAIL(eslFAIL, errmsg, "comparison failed: max_length");
+   if (om1->nj        != om2->nj)        ESL_FAIL(eslFAIL, errmsg, "comparison failed: nj");
+   if (om1->abc->type != om2->abc->type) ESL_FAIL(eslFAIL, errmsg, "comparison failed: alphabet type");
+ 
+@@ -1826,6 +1828,12 @@
+ 	a16.v = om1->rbv[x][q]; b16.v = om2->rbv[x][q];
+ 	for (r = 0; r < 16; r++) if (a16.c[r] != b16.c[r]) ESL_FAIL(eslFAIL, errmsg, "comparison failed: rb[%d] elem %d", q, r);
+       }
++  for (x = 0; x < om1->abc->Kp; x++)
++    for (q = 0; q < Q16x; q++)
++      {
++	a16.v = om1->sbv[x][q]; b16.v = om2->sbv[x][q];
++	for (r = 0; r < 16; r++) if (a16.c[r] != b16.c[r]) ESL_FAIL(eslFAIL, errmsg, "comparison failed: sb[%d] elem %d", q, r);
++      }
+   if (om1->tbm_b     != om2->tbm_b)     ESL_FAIL(eslFAIL, errmsg, "comparison failed: tbm_b");
+   if (om1->tec_b     != om2->tec_b)     ESL_FAIL(eslFAIL, errmsg, "comparison failed: tec_b");
+   if (om1->tjb_b     != om2->tjb_b)     ESL_FAIL(eslFAIL, errmsg, "comparison failed: tjb_b");
+--- a/src/jackhmmer.c
++++ b/src/jackhmmer.c
+@@ -30,6 +30,7 @@
+ #endif 
+ 
+ #include "hmmer.h"
++#include "p7_evo_iter.h"
+ 
+ typedef struct {
+ #ifdef HMMER_THREADS
+@@ -575,12 +576,18 @@
+       P7_OPROFILE     *om      = NULL;       /* optimized query profile                  */
+       P7_TRACE        *qtr     = NULL;       /* faux trace for query sequence            */
+       ESL_MSA         *msa     = NULL;       /* multiple alignment of included hits      */
++      P7_EVO_ITER     *evo_iter = NULL;      /* query-local iteration algorithm state     */
++      int              converged;
++      int              had_msa;
+       
+       if (esl_opt_IsOn(go, "--chkhmm")) ret_hmm = &hmm;
+ 
+       nquery++;
+       if (qsq->n == 0) continue; /* skip zero length queries as if they aren't even present. */
+ 
++      if ((evo_iter = p7_evo_iter_Create()) == NULL)
++	p7_Fail("Failed to allocate iteration algorithm state");
++
+       if (fprintf(ofp, "Query:       %s  [L=%ld]\n", qsq->name, (long) qsq->n) < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+       if (qsq->acc[0]  != '\0' && fprintf(ofp, "Accession:   %s\n", qsq->acc)  < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed"); 
+       if (qsq->desc[0] != '\0' && fprintf(ofp, "Description: %s\n", qsq->desc) < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");  
+@@ -595,29 +602,23 @@
+ 	  if (info->th  != NULL) p7_tophits_Destroy(info->th);
+ 	  if (info->om  != NULL) p7_oprofile_Destroy(info->om);
+ 
+- 	  /* Create the search model: from query alone (round 1) or from MSA (round 2+) */
+-	  if (msa == NULL)	/* round 1 */
+-	    {
+-	      p7_SingleBuilder(bld, qsq, info[0].bg, ret_hmm, &qtr, NULL, &om); /* bypass HMM - only need model */
+-	      prv_msa_nseq = 1;
+-	    }
+-	  else
+-	    {
+-	      /* Throw away old model. Build new one. */
+-	      status = p7_Builder(bld, msa, info[0].bg, ret_hmm, NULL, NULL, &om, NULL);
+-	      if      (status == eslENORESULT) p7_Fail("Failed to construct new model from iteration %d results:\n%s", iteration, bld->errbuf);
+-	      else if (status == eslEFORMAT)   p7_Fail("Failed to construct new model from iteration %d results:\n%s", iteration, bld->errbuf);
+-	      else if (status != eslOK)        p7_Fail("Unexpected error constructing new model at iteration %d:",     iteration);
++	  /* Create the search model through the query-local iteration island. */
++	  had_msa = (msa != NULL);
++	  status = p7_evo_iter_BeginRound(evo_iter, bld, qsq, info[0].bg,
++	                                  ret_hmm, &qtr, &msa, &om,
++	                                  &prv_msa_nseq);
++	  if      (status == eslENORESULT) p7_Fail("Failed to construct new model from iteration %d results:\n%s", iteration, bld->errbuf);
++	  else if (status == eslEFORMAT)   p7_Fail("Failed to construct new model from iteration %d results:\n%s", iteration, bld->errbuf);
++	  else if (status != eslOK)        p7_Fail("Unexpected error constructing new model at iteration %d:",     iteration);
+ 
+-	      if (fprintf(ofp, "@@\n")                                               < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");  
++	  if (had_msa)
++	    {
++	      if (fprintf(ofp, "@@\n")                                               < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+ 	      if (fprintf(ofp, "@@ Round:                  %d\n", iteration)         < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+-		  if (fprintf(ofp, "@@ Included in MSA:        %d subsequences (query + %d subseqs from %d targets)\n",
+-		      msa->nseq, msa->nseq-1, kh->nkeys)                             < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
++	      if (fprintf(ofp, "@@ Included in MSA:        %d subsequences (query + %d subseqs from %d targets)\n",
++	                  prv_msa_nseq, prv_msa_nseq-1, kh->nkeys)                   < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+ 	      if (fprintf(ofp, "@@ Model size:             %d positions\n", om->M)   < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+ 	      if (fprintf(ofp, "@@\n\n")                                             < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+-
+-	      prv_msa_nseq = msa->nseq;
+-	      esl_msa_Destroy(msa);
+ 	    }
+ 
+ 	  /* HMM checkpoint output */
+@@ -671,22 +672,16 @@
+ 	      p7_oprofile_Destroy(info[i].om);
+ 	    }
+ 
+-	  /* Print the results. */
+-	  p7_tophits_SortBySortkey(info->th);
+-	  p7_tophits_Threshold(info->th, info->pli);
+-	  p7_tophits_CompareRanking(info->th, kh, &nnew_targets);
++	  status = p7_evo_iter_EndRound(evo_iter, info->th, info->pli, abc,
++	                                qsq, qtr, kh, iteration, prv_msa_nseq,
++	                                &msa, &nnew_targets, &converged);
++	  if (status != eslOK)
++	    p7_Fail("Iteration algorithm failed after round %d with status %d", iteration, status);
++
++	  /* Presentation remains in the frozen driver. */
+ 	  p7_tophits_Targets(ofp, info->th, info->pli, textw); if (fprintf(ofp, "\n\n") < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+ 	  p7_tophits_Domains(ofp, info->th, info->pli, textw); if (fprintf(ofp, "\n\n") < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+ 
+-	  /* Create alignment of the top hits */
+-	  /* <&qsq, &qtr, 1> included in p7_tophits_Alignment args here => initial query is added to the msa at each round. */
+-	  p7_tophits_Alignment(info->th, abc, &qsq, &qtr, 1, p7_ALL_CONSENSUS_COLS, &msa);
+-	  esl_msa_Digitize(abc,msa,NULL);
+-	  esl_msa_FormatName(msa, "%s-i%d", qsq->name, iteration);  
+-	  if (qsq->acc[0]  != '\0') esl_msa_SetAccession(msa, qsq->acc,  -1);
+-	  if (qsq->desc[0] != '\0') esl_msa_SetDesc     (msa, qsq->desc, -1);
+-	  esl_msa_FormatAuthor(msa, "jackhmmer (HMMER %s)", HMMER_VERSION);
+-
+ 	  /* Optional checkpointing */
+ 	  if (esl_opt_IsOn(go, "--chkali")) checkpoint_msa(nquery, msa, esl_opt_GetString(go, "--chkali"), iteration);
+ 
+@@ -699,7 +694,7 @@
+ 	  if (fprintf(ofp, "@@ New targets included:   %d\n", nnew_targets)  < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+ 	  if (fprintf(ofp, "@@ New alignment includes: %d subseqs (was %d), including original query\n",
+ 		  msa->nseq, prv_msa_nseq)                                   < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+-	  if (nnew_targets == 0 && msa->nseq <= prv_msa_nseq)
++	  if (converged)
+ 	    {
+ 	      if (fprintf(ofp, "@@\n")                                       < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+ 	      if (fprintf(ofp, "@@ CONVERGED (in %d rounds). \n", iteration) < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+@@ -738,6 +733,7 @@
+       esl_msa_Destroy(msa);
+       p7_oprofile_Destroy(om);
+       p7_trace_Destroy(qtr);
++      p7_evo_iter_Destroy(evo_iter);
+       esl_sq_Reuse(qsq);
+       esl_keyhash_Reuse(kh);
+       esl_sqfile_Position(dbfp, 0);
+@@ -1095,12 +1091,18 @@
+       P7_OPROFILE     *om      = NULL;       /* optimized query profile                  */
+       P7_TRACE        *qtr     = NULL;       /* faux trace for query sequence            */
+       ESL_MSA         *msa     = NULL;       /* multiple alignment of included hits      */
++      P7_EVO_ITER     *evo_iter = NULL;      /* query-local iteration algorithm state     */
++      int              converged;
++      int              had_msa;
+       
+       if (esl_opt_IsOn(go, "--chkhmm")) ret_hmm = &hmm;
+ 
+       nquery++;
+       if (qsq->n == 0) continue; /* skip zero length queries as if they aren't even present. */
+ 
++      if ((evo_iter = p7_evo_iter_Create()) == NULL)
++	mpi_failure("Failed to allocate iteration algorithm state");
++
+       if (fprintf(ofp, "Query:       %s  [L=%ld]\n", qsq->name, (long) qsq->n) < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+       if (qsq->acc[0]  != '\0' && fprintf(ofp, "Accession:   %s\n", qsq->acc)  < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+       if (qsq->desc[0] != '\0' && fprintf(ofp, "Description: %s\n", qsq->desc) < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");  
+@@ -1116,30 +1118,22 @@
+ 	  if (th  != NULL) p7_tophits_Destroy(th);
+ 	  if (om  != NULL) p7_oprofile_Destroy(om);
+ 
+- 	  /* Create the search model: from query alone (round 1) or from MSA (round 2+) */
+-	  if (msa == NULL)	/* round 1 */
+-	    {
+-	      p7_SingleBuilder(bld, qsq, bg, ret_hmm, &qtr, NULL, &om); /* bypass HMM - only need model */
++	  /* Create the search model through the query-local iteration island. */
++	  had_msa = (msa != NULL);
++	  status = p7_evo_iter_BeginRound(evo_iter, bld, qsq, bg, ret_hmm,
++	                                  &qtr, &msa, &om, &prv_msa_nseq);
++	  if      (status == eslENORESULT) mpi_failure("Failed to construct new model from iteration %d results:\n%s", iteration, bld->errbuf);
++	  else if (status == eslEFORMAT)   mpi_failure("Failed to construct new model from iteration %d results:\n%s", iteration, bld->errbuf);
++	  else if (status != eslOK)        mpi_failure("Unexpected error constructing new model at iteration %d:",     iteration);
+ 
+-	      prv_msa_nseq = 1;
+-	    }
+-	  else
++	  if (had_msa)
+ 	    {
+-	      /* Throw away old model. Build new one. */
+-	      status = p7_Builder(bld, msa, bg, ret_hmm, NULL, NULL, &om, NULL);
+-	      if      (status == eslENORESULT) mpi_failure("Failed to construct new model from iteration %d results:\n%s", iteration, bld->errbuf);
+-	      else if (status == eslEFORMAT)   mpi_failure("Failed to construct new model from iteration %d results:\n%s", iteration, bld->errbuf);
+-	      else if (status != eslOK)        mpi_failure("Unexpected error constructing new model at iteration %d:",     iteration);
+-
+ 	      if (fprintf(ofp, "@@\n")                                             < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+ 	      if (fprintf(ofp, "@@ Round:                  %d\n", iteration)       < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+ 	      if (fprintf(ofp, "@@ Included in MSA:        %d subsequences (query + %d subseqs from %d targets)\n",
+-			  msa->nseq, msa->nseq-1, kh->nkeys)                       < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
++	                  prv_msa_nseq, prv_msa_nseq-1, kh->nkeys)                 < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+ 	      if (fprintf(ofp, "@@ Model size:             %d positions\n", om->M) < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+ 	      if (fprintf(ofp, "@@\n\n")                                           < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+-
+-	      prv_msa_nseq = msa->nseq;
+-	      esl_msa_Destroy(msa);
+ 	    }
+ 
+ 	  /* HMM checkpoint output */
+@@ -1226,21 +1220,16 @@
+ 		}
+ 	    }
+ 
+-	  /* Print the results. */
+-	  p7_tophits_SortBySortkey(th);
+-	  p7_tophits_Threshold(th, pli);
+-	  p7_tophits_CompareRanking(th, kh, &nnew_targets);
++	  status = p7_evo_iter_EndRound(evo_iter, th, pli, abc, qsq, qtr, kh,
++	                                iteration, prv_msa_nseq, &msa,
++	                                &nnew_targets, &converged);
++	  if (status != eslOK)
++	    mpi_failure("Iteration algorithm failed after round %d with status %d", iteration, status);
++
++	  /* Presentation remains in the frozen driver. */
+ 	  p7_tophits_Targets(ofp, th, pli, textw); if (fprintf(ofp, "\n\n") < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+ 	  p7_tophits_Domains(ofp, th, pli, textw); if (fprintf(ofp, "\n\n") < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+ 
+-	  /* Create alignment of the top hits */
+-	  p7_tophits_Alignment(th, abc, &qsq, &qtr, 1, p7_ALL_CONSENSUS_COLS, &msa);
+-	  esl_msa_Digitize(abc,msa,NULL);
+-	  esl_msa_FormatName(msa, "%s-i%d", qsq->name, iteration);  
+-	  if (qsq->acc[0]  != '\0') esl_msa_SetAccession(msa, qsq->acc,  -1);
+-	  if (qsq->desc[0] != '\0') esl_msa_SetDesc     (msa, qsq->desc, -1);
+-	  esl_msa_FormatAuthor(msa, "jackhmmer (HMMER %s)", HMMER_VERSION);
+-
+ 	  /* Optional checkpointing */
+ 	  if (esl_opt_IsOn(go, "--chkali")) checkpoint_msa(nquery, msa, esl_opt_GetString(go, "--chkali"), iteration);
+ 
+@@ -1252,7 +1241,7 @@
+ 	  if (fprintf(ofp, "@@ New targets included:   %d\n", nnew_targets)  < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+ 	  if (fprintf(ofp, "@@ New alignment includes: %d subseqs (was %d), including original query\n",
+ 		      msa->nseq, prv_msa_nseq)                               < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+-	  if (nnew_targets == 0 && msa->nseq <= prv_msa_nseq)
++	  if (converged)
+ 	    {
+ 	      if (fprintf(ofp, "@@\n")                                       < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+ 	      if (fprintf(ofp, "@@ CONVERGED (in %d rounds). \n", iteration) < 0) ESL_EXCEPTION_SYS(eslEWRITE, "write failed");
+@@ -1300,6 +1289,7 @@
+ 
+       esl_msa_Destroy(msa);
+       p7_trace_Destroy(qtr);
++      p7_evo_iter_Destroy(evo_iter);
+       esl_sq_Reuse(qsq);
+       esl_keyhash_Reuse(kh);
+       esl_sqfile_Position(dbfp, 0);
+@@ -1725,5 +1715,3 @@
+   return;
+ }
+ #endif   /* HMMER_THREADS */
+-
+-
+--- a/src/Makefile.in
++++ b/src/Makefile.in
+@@ -98,6 +98,8 @@
+ 
+ HDRS =  hmmer.h \
+ 	cachedb.h \
++	p7_evo_align.h \
++	p7_evo_iter.h \
+ 	p7_gbands.h \
+ 	p7_gmxb.h \
+ 	p7_gmxchk.h \
+@@ -141,6 +143,10 @@
+ 	p7_builder.o\
+ 	p7_domain.o\
+ 	p7_domaindef.o\
++	p7_evo_align.o\
++	p7_evo_align_stock.o\
++	p7_evo_iter.o\
++	p7_evo_iter_stock.o\
+ 	p7_gbands.o\
+ 	p7_gmx.o\
+ 	p7_gmxb.o\
+--- a/src/p7_pipeline.c
++++ b/src/p7_pipeline.c
+@@ -19,9 +19,15 @@
+ #include "esl_vectorops.h"
+ 
+ #include "hmmer.h"
++#include "p7_evo_align.h"
+ 
+ #include "esl_sqio.h" //!!!!DEBUG
+ 
++/* Frozen stock core, called only through p7_evo_align_stock.c. */
++int p7_pipeline_Stock(P7_PIPELINE *pli, P7_OPROFILE *om, P7_BG *bg,
++                      const ESL_SQ *sq, const ESL_SQ *ntsq,
++                      P7_TOPHITS *hitlist);
++
+ /* Struct used to pass a collection of useful temporary objects around
+  * within the LongTarget functions
+  *  */
+@@ -104,6 +110,8 @@
+ 
+   ESL_ALLOC(pli, sizeof(P7_PIPELINE));
+ 
++  pli->evo_align = NULL;
++
+   pli->do_alignment_score_calc = 0;
+   pli->long_targets = long_targets;
+ 
+@@ -250,6 +258,8 @@
+   pli->hfp             = NULL;
+   pli->errbuf[0]       = '\0';
+ 
++  if ((pli->evo_align = p7_evo_align_Create()) == NULL) goto ERROR;
++
+   return pli;
+ 
+  ERROR:
+@@ -276,7 +286,7 @@
+   p7_omx_Reuse(pli->fwd);
+   p7_omx_Reuse(pli->bck);
+   p7_domaindef_Reuse(pli->ddef);
+-  return eslOK;
++  return p7_evo_align_Reuse(pli->evo_align);
+ }
+ 
+ 
+@@ -297,6 +307,7 @@
+   p7_omx_Destroy(pli->bck);
+   esl_randomness_Destroy(pli->r);
+   p7_domaindef_Destroy(pli->ddef);
++  p7_evo_align_Destroy(pli->evo_align);
+   free(pli);
+ }
+ /*---------------- end, P7_PIPELINE object ----------------------*/
+@@ -655,8 +666,20 @@
+   return eslOK;
+ }
+ 
+-/* Function:  p7_Pipeline()
+- * Synopsis:  HMMER3's accelerated seq/profile comparison pipeline.
++/* p7_Pipeline() preserves the public entry-point signature and routes each
++ * comparison through state owned by the caller's P7_PIPELINE instance.
++ * Callers must be rebuilt with this hmmer.h because P7_PIPELINE owns an
++ * additional opaque state pointer.
++ */
++int
++p7_Pipeline(P7_PIPELINE *pli, P7_OPROFILE *om, P7_BG *bg, const ESL_SQ *sq, const ESL_SQ *ntsq, P7_TOPHITS *hitlist)
++{
++  return p7_evo_align_Run(pli->evo_align, pli, om, bg, sq, ntsq, hitlist);
++}
++
++
++/* Function:  p7_pipeline_Stock()
++ * Synopsis:  Frozen HMMER3 accelerated seq/profile comparison pipeline.
+  *
+  * Purpose:   Run H3's accelerated pipeline to compare profile <om>
+  *            against sequence <sq>. If a significant hit is found,
+@@ -694,7 +717,7 @@
+  *            been careful enough about. [SRE H9/4]
+  */
+ int
+-p7_Pipeline(P7_PIPELINE *pli, P7_OPROFILE *om, P7_BG *bg, const ESL_SQ *sq, const ESL_SQ *ntsq, P7_TOPHITS *hitlist)
++p7_pipeline_Stock(P7_PIPELINE *pli, P7_OPROFILE *om, P7_BG *bg, const ESL_SQ *sq, const ESL_SQ *ntsq, P7_TOPHITS *hitlist)
+ {
+   P7_HIT          *hit     = NULL;     /* ptr to the current hit output data      */
+   float            usc, vfsc, fwdsc;   /* filter scores                           */
+@@ -2075,5 +2098,3 @@
+ }
+ #endif /*p7PIPELINE_EXAMPLE2*/
+ /*--------------- end, scan mode (HMM db) example ---------------*/
+-
+-
+--- a/src/p7_evo_align.c
++++ b/src/p7_evo_align.c
+@@ -0,0 +1,47 @@
++/* Agent-editable comparison algorithm island.
++ *
++ * The stock implementation deliberately delegates every comparison to the
++ * frozen HMMER pipeline. Optimized implementations can add private helpers
++ * and per-worker scratch state here while retaining the public contract and
++ * exact stock fallback in p7_evo_align_stock.c.
++ */
++#include <p7_config.h>
++
++#include <stdlib.h>
++
++#include "easel.h"
++#include "hmmer.h"
++#include "p7_evo_align.h"
++
++struct p7_evo_align_s {
++  int reserved;
++};
++
++P7_EVO_ALIGN *
++p7_evo_align_Create(void)
++{
++  return calloc(1, sizeof(P7_EVO_ALIGN));
++}
++
++int
++p7_evo_align_Reuse(P7_EVO_ALIGN *state)
++{
++  (void) state;
++  return eslOK;
++}
++
++void
++p7_evo_align_Destroy(P7_EVO_ALIGN *state)
++{
++  free(state);
++}
++
++int
++p7_evo_align_Run(P7_EVO_ALIGN *state,
++                 P7_PIPELINE *pli, P7_OPROFILE *om, P7_BG *bg,
++                 const ESL_SQ *sq, const ESL_SQ *ntsq,
++                 P7_TOPHITS *hitlist)
++{
++  (void) state;
++  return p7_evo_align_stock_Run(pli, om, bg, sq, ntsq, hitlist);
++}
+--- a/src/p7_evo_align.h
++++ b/src/p7_evo_align.h
+@@ -0,0 +1,28 @@
++/* Agent-editable sequence/profile comparison island.
++ *
++ * This header is part of the frozen driver contract. Implementations may
++ * change p7_evo_align.c, but must preserve these entry points and may not
++ * share mutable state between pipeline workers.
++ */
++#ifndef p7EVO_ALIGN_INCLUDED
++#define p7EVO_ALIGN_INCLUDED
++
++#include "hmmer.h"
++
++typedef struct p7_evo_align_s P7_EVO_ALIGN;
++
++extern P7_EVO_ALIGN *p7_evo_align_Create (void);
++extern int           p7_evo_align_Reuse  (P7_EVO_ALIGN *state);
++extern void          p7_evo_align_Destroy(P7_EVO_ALIGN *state);
++
++extern int p7_evo_align_Run(P7_EVO_ALIGN *state,
++                            P7_PIPELINE *pli, P7_OPROFILE *om, P7_BG *bg,
++                            const ESL_SQ *sq, const ESL_SQ *ntsq,
++                            P7_TOPHITS *hitlist);
++
++/* Exact reference fallback. This implementation is frozen. */
++extern int p7_evo_align_stock_Run(P7_PIPELINE *pli, P7_OPROFILE *om, P7_BG *bg,
++                                  const ESL_SQ *sq, const ESL_SQ *ntsq,
++                                  P7_TOPHITS *hitlist);
++
++#endif /* p7EVO_ALIGN_INCLUDED */
+--- a/src/p7_evo_align_stock.c
++++ b/src/p7_evo_align_stock.c
+@@ -0,0 +1,23 @@
++/* Frozen reference adapter for the original HMMER comparison pipeline.
++ *
++ * p7_pipeline_Stock() remains in p7_pipeline.c so its private helper access
++ * and source history stay intact. Agent patches must not modify either this
++ * adapter or that stock core.
++ */
++#include <p7_config.h>
++
++#include "easel.h"
++#include "hmmer.h"
++#include "p7_evo_align.h"
++
++extern int p7_pipeline_Stock(P7_PIPELINE *pli, P7_OPROFILE *om, P7_BG *bg,
++                             const ESL_SQ *sq, const ESL_SQ *ntsq,
++                             P7_TOPHITS *hitlist);
++
++int
++p7_evo_align_stock_Run(P7_PIPELINE *pli, P7_OPROFILE *om, P7_BG *bg,
++                       const ESL_SQ *sq, const ESL_SQ *ntsq,
++                       P7_TOPHITS *hitlist)
++{
++  return p7_pipeline_Stock(pli, om, bg, sq, ntsq, hitlist);
++}
+--- a/src/p7_evo_iter.c
++++ b/src/p7_evo_iter.c
+@@ -0,0 +1,52 @@
++/* Agent-editable jackhmmer iteration algorithm island. */
++#include <p7_config.h>
++
++#include <stdlib.h>
++
++#include "easel.h"
++#include "hmmer.h"
++#include "p7_evo_iter.h"
++
++struct p7_evo_iter_s {
++  int reserved;
++};
++
++P7_EVO_ITER *
++p7_evo_iter_Create(void)
++{
++  return calloc(1, sizeof(P7_EVO_ITER));
++}
++
++void
++p7_evo_iter_Destroy(P7_EVO_ITER *state)
++{
++  free(state);
++}
++
++int
++p7_evo_iter_BeginRound(P7_EVO_ITER *state,
++                       P7_BUILDER *bld, ESL_SQ *query, P7_BG *bg,
++                       P7_HMM **opt_hmm, P7_TRACE **query_trace,
++                       ESL_MSA **round_msa, P7_OPROFILE **ret_om,
++                       int *ret_previous_msa_nseq)
++{
++  (void) state;
++  return p7_evo_iter_stock_BeginRound(bld, query, bg, opt_hmm, query_trace,
++                                      round_msa, ret_om,
++                                      ret_previous_msa_nseq);
++}
++
++int
++p7_evo_iter_EndRound(P7_EVO_ITER *state,
++                     P7_TOPHITS *hits, P7_PIPELINE *pli,
++                     const ESL_ALPHABET *abc, ESL_SQ *query,
++                     P7_TRACE *query_trace, ESL_KEYHASH *ranking,
++                     int iteration, int previous_msa_nseq,
++                     ESL_MSA **ret_msa, int *ret_new_targets,
++                     int *ret_converged)
++{
++  (void) state;
++  return p7_evo_iter_stock_EndRound(hits, pli, abc, query, query_trace,
++                                    ranking, iteration, previous_msa_nseq,
++                                    ret_msa, ret_new_targets, ret_converged);
++}
+--- a/src/p7_evo_iter.h
++++ b/src/p7_evo_iter.h
+@@ -0,0 +1,48 @@
++/* Agent-editable jackhmmer iteration island.
++ *
++ * The driver owns I/O, work distribution, checkpointing, and presentation.
++ * This frozen API owns only construction of the round profile and conversion
++ * of completed hits into the next-round MSA/convergence decision.
++ */
++#ifndef p7EVO_ITER_INCLUDED
++#define p7EVO_ITER_INCLUDED
++
++#include "hmmer.h"
++
++typedef struct p7_evo_iter_s P7_EVO_ITER;
++
++extern P7_EVO_ITER *p7_evo_iter_Create (void);
++extern void         p7_evo_iter_Destroy(P7_EVO_ITER *state);
++
++extern int p7_evo_iter_BeginRound(P7_EVO_ITER *state,
++                                  P7_BUILDER *bld, ESL_SQ *query, P7_BG *bg,
++                                  P7_HMM **opt_hmm, P7_TRACE **query_trace,
++                                  ESL_MSA **round_msa, P7_OPROFILE **ret_om,
++                                  int *ret_previous_msa_nseq);
++
++extern int p7_evo_iter_EndRound(P7_EVO_ITER *state,
++                                P7_TOPHITS *hits, P7_PIPELINE *pli,
++                                const ESL_ALPHABET *abc, ESL_SQ *query,
++                                P7_TRACE *query_trace, ESL_KEYHASH *ranking,
++                                int iteration, int previous_msa_nseq,
++                                ESL_MSA **ret_msa, int *ret_new_targets,
++                                int *ret_converged);
++
++/* Exact reference fallbacks. These implementations are frozen. */
++extern int p7_evo_iter_stock_BeginRound(P7_BUILDER *bld, ESL_SQ *query,
++                                        P7_BG *bg, P7_HMM **opt_hmm,
++                                        P7_TRACE **query_trace,
++                                        ESL_MSA **round_msa,
++                                        P7_OPROFILE **ret_om,
++                                        int *ret_previous_msa_nseq);
++
++extern int p7_evo_iter_stock_EndRound(P7_TOPHITS *hits, P7_PIPELINE *pli,
++                                      const ESL_ALPHABET *abc, ESL_SQ *query,
++                                      P7_TRACE *query_trace,
++                                      ESL_KEYHASH *ranking, int iteration,
++                                      int previous_msa_nseq,
++                                      ESL_MSA **ret_msa,
++                                      int *ret_new_targets,
++                                      int *ret_converged);
++
++#endif /* p7EVO_ITER_INCLUDED */
+--- a/src/p7_evo_iter_stock.c
++++ b/src/p7_evo_iter_stock.c
+@@ -0,0 +1,75 @@
++/* Frozen reference implementation of jackhmmer's iteration policy. */
++#include <p7_config.h>
++
++#include "easel.h"
++#include "esl_keyhash.h"
++#include "esl_msa.h"
++#include "esl_sq.h"
++
++#include "hmmer.h"
++#include "p7_evo_iter.h"
++
++int
++p7_evo_iter_stock_BeginRound(P7_BUILDER *bld, ESL_SQ *query, P7_BG *bg,
++                             P7_HMM **opt_hmm, P7_TRACE **query_trace,
++                             ESL_MSA **round_msa, P7_OPROFILE **ret_om,
++                             int *ret_previous_msa_nseq)
++{
++  int status;
++
++  if (*round_msa == NULL)
++    {
++      *ret_previous_msa_nseq = 1;
++      return p7_SingleBuilder(bld, query, bg, opt_hmm, query_trace,
++                              NULL, ret_om);
++    }
++
++  *ret_previous_msa_nseq = (*round_msa)->nseq;
++  status = p7_Builder(bld, *round_msa, bg, opt_hmm, NULL, NULL, ret_om,
++                      NULL);
++  if (status != eslOK) return status;
++
++  esl_msa_Destroy(*round_msa);
++  *round_msa = NULL;
++  return eslOK;
++}
++
++int
++p7_evo_iter_stock_EndRound(P7_TOPHITS *hits, P7_PIPELINE *pli,
++                           const ESL_ALPHABET *abc, ESL_SQ *query,
++                           P7_TRACE *query_trace, ESL_KEYHASH *ranking,
++                           int iteration, int previous_msa_nseq,
++                           ESL_MSA **ret_msa, int *ret_new_targets,
++                           int *ret_converged)
++{
++  int status;
++
++  p7_tophits_SortBySortkey(hits);
++  if ((status = p7_tophits_Threshold(hits, pli)) != eslOK) return status;
++  if ((status = p7_tophits_CompareRanking(hits, ranking,
++                                          ret_new_targets)) != eslOK)
++    return status;
++
++  status = p7_tophits_Alignment(hits, abc, &query, &query_trace, 1,
++                                p7_ALL_CONSENSUS_COLS, ret_msa);
++  if (status != eslOK) return status;
++
++  if ((status = esl_msa_Digitize(abc, *ret_msa, NULL)) != eslOK)
++    return status;
++  if ((status = esl_msa_FormatName(*ret_msa, "%s-i%d", query->name,
++                                   iteration)) != eslOK)
++    return status;
++  if (query->acc[0] != '\0' &&
++      (status = esl_msa_SetAccession(*ret_msa, query->acc, -1)) != eslOK)
++    return status;
++  if (query->desc[0] != '\0' &&
++      (status = esl_msa_SetDesc(*ret_msa, query->desc, -1)) != eslOK)
++    return status;
++  if ((status = esl_msa_FormatAuthor(*ret_msa, "jackhmmer (HMMER %s)",
++                                     HMMER_VERSION)) != eslOK)
++    return status;
++
++  *ret_converged = (*ret_new_targets == 0 &&
++                    (*ret_msa)->nseq <= previous_msa_nseq);
++  return eslOK;
++}

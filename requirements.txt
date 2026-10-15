@@ -1,0 +1,22 @@
+# SeqAlign 引擎侧依赖。
+#
+# 刻意保持极小：优化引擎本身只用到 pydantic（数据模型）与 PyYAML（部分配置读取）。
+# 不含 Slurm / HMMER —— 那两者是系统级工具，见 README §8。
+
+pydantic>=2
+PyYAML
+
+# 仅当解释器是 Python 3.9 时才需要。
+#
+# 原因：pydantic v2 在**运行时求值**字段注解，而 c_patch_loop/models.py 里有大量
+# `str | None` 这类 PEP 604 写法（X | Y 到 3.10 才原生支持）。在 3.9 上
+# eval("str | None") 会抛 TypeError，且 pydantic 不自带降级实现。
+# 缺了它，模型类定义阶段就 import 失败。**推荐直接用 Python >= 3.10。**
+eval_type_backport>=0.2; python_version < "3.10"
+
+# 可选：仅 pyhmmer 剖析预备路径需要（默认关闭）。
+# 评测默认走编译好的 HMMER CLI，不需要 pyhmmer。
+# pyhmmer
+
+# 可选：仅当用 openai 兼容端点做"模型即提案器"时需要（默认入口用文件/回调提案器）。
+# openai

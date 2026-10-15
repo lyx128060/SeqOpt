@@ -1,0 +1,35 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# --- Downloaded / built, deliberately not vendored ---
+# HMMER 3.4 is fetched and patched by scripts/setup_hmmer.sh
+/tools/
+# Large reference databases (UniRef90, ASTRAL, SCOPe)
+/data/
+
+# --- Run artefacts ---
+# Every optimization run writes an immutable audit trail here. These are large
+# and site-specific; publish selected excerpts under results/ instead.
+/runs/
+/dry_run_out/
+/harness_smoke_run/
+/logs/
+tmp_compile_test/
+
+# --- Local configuration and credentials ---
+# Never commit these: they carry API keys and site-specific cluster paths.
+.env
+env.sh
+configs/config.local.yaml
+configs/*.local.yaml
+*.local.yaml
+
+# --- Editor / OS ---
+.DS_Store
+*.swp
+*~

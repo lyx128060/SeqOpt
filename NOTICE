@@ -1,0 +1,83 @@
+SeqAlign — HMMER jackhmmer C-source optimization loop
+Copyright 2026 the SeqAlign contributors
+
+This product is an improved version of a fork of EvoMaster and includes
+modified third-party software. The notices below are provided for attribution
+and to satisfy the redistribution terms of the upstream licences.
+
+================================================================================
+1. EvoMaster (upstream framework)
+================================================================================
+
+This project is built on and derives from EvoMaster:
+
+    EvoMaster: A Foundational Auto-Research Agent Framework for Agentic Science
+    at Scale
+    https://github.com/sjtu-sai-agents/EvoMaster
+    https://arxiv.org/abs/2604.17406
+
+    Licensed under the Apache License, Version 2.0.
+
+The upstream framework code (the `evomaster/` package and the bundled
+`playground/` extensions) is NOT redistributed in this repository. It is
+consumed as an external dependency / referenced as the origin of the engine
+design. The Apache-2.0 licence text for this repository's own code is in
+LICENSE.
+
+Modifications relative to upstream are documented in README.md §12 and
+docs/UPSTREAM.md, and are traceable through the git history of the fork
+repository https://github.com/lyx128060/EvoMaster-Jackhmmer.
+
+================================================================================
+2. HMMER 3.4 (the software under optimization)
+================================================================================
+
+HMMER - Biological sequence analysis with profile hidden Markov models
+Copyright (C) 1992-2023 Sean R. Eddy
+Copyright (C) 2015-2023 President and Fellows of Harvard College
+Copyright (C) 2000-2023 Howard Hughes Medical Institute
+Copyright (C) 1995-2006 Washington University School of Medicine
+Copyright (C) 1992-1995 MRC Laboratory of Molecular Biology
+
+    Licensed under the BSD three-clause licence.
+
+HMMER 3.4 source code is NOT vendored in this repository. It is downloaded and
+verified by `scripts/setup_hmmer.sh`. The modifications this project makes to
+HMMER are distributed as a patch and are therefore a *derivative work* of HMMER
+under the same BSD-3-Clause terms:
+
+    patches/0001-expose-optimization-islands.patch   (our modifications)
+    patches/HMMER-3.4-LICENSE                        (HMMER's licence, verbatim)
+
+The HMMER licence text MUST be retained alongside the patch. Redistributions of
+the patched HMMER source must also retain HMMER's copyright notice, its list of
+conditions and its disclaimer. Neither the name of the HMMER project nor the
+names of its contributors may be used to endorse or promote products derived
+from this software without specific prior written permission.
+
+Third-party components bundled inside HMMER (for example libdivsufsort) carry
+their own notices in the HMMER distribution; those notices travel with the
+pristine HMMER tarball obtained by scripts/setup_hmmer.sh.
+
+================================================================================
+3. Reference data (not redistributed)
+================================================================================
+
+The benchmark databases referenced by the evaluation pipeline are NOT included:
+
+  * UniRef90            - UniProt Consortium, https://www.uniprot.org/help/downloads
+  * ASTRAL 40% subset   - SCOPe, https://scop.berkeley.edu/downloads/
+  * SCOPe lineage file  - SCOPe, https://scop.berkeley.edu/downloads/
+
+Only a 112 KB smoke query set derived from the ASTRAL 40% subset (small enough
+to be redistributed in accordance with SCOPe's terms) is included, under
+workspace/seq_align/data_test/.
+
+================================================================================
+4. Development tooling
+================================================================================
+
+Parts of this codebase were developed with the assistance of AI coding tools.
+Generated code and all scientific conclusions were reviewed by the human author,
+who is responsible for their correctness. Commits carrying
+"Co-Authored-By: Claude" reflect this.

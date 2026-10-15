@@ -1,0 +1,84 @@
+# SeqOpt evaluation configuration — EXAMPLE ONLY
+#
+# Copy to configs/config.local.yaml and fill in your site's values.
+# configs/config.local.yaml is gitignored: it holds credentials and cluster
+# paths that must never be committed.
+#
+# This example deliberately contains NO credentials and NO site-specific paths.
+
+# ---------------------------------------------------------------------------
+# LLM endpoint (only needed by the "model as proposer" path).
+# Prefer environment variables over literals so nothing secret reaches git.
+# ---------------------------------------------------------------------------
+llm:
+  model: "${LLM_MODEL}"
+  base_url: "${LLM_API_BASE}"
+  api_key: "${LLM_API_KEY}"
+  timeout_s: 1800
+
+# ---------------------------------------------------------------------------
+# Reference data. All three are downloaded separately; see README §8.
+# ---------------------------------------------------------------------------
+data:
+  astral_db: "${ASTRAL_DB}"
+  uniref_db: "${UNIREF_DB}"
+  scop_txt: "${SCOP_TXT}"
+  # Query sampling is reproducible: same ASTRAL file + same seed => same FASTA.
+  sample_seed: 996
+  smoke_queries: 10
+  full_queries: 10
+
+# ---------------------------------------------------------------------------
+# Evaluation backend.
+#   local  -> run HMMER on the current node (fine for smoke tests, not for
+#             real acceptance decisions: it is not the measured configuration)
+#   slurm  -> submit job arrays (the configuration every reported number used)
+# ---------------------------------------------------------------------------
+evaluation:
+  backend: slurm
+  # Cores ONE query may use. Must match between candidate and reference or the
+  # comparability fingerprint will refuse the comparison.
+  query_cpus: 8
+  stage:
+    smoke:
+      partition: "${SEQ_ALIGN_SLURM_PARTITION}"
+      memory: 4G
+      walltime: "00:30:00"
+      queries_per_job: 5
+      max_parallel: 5
+    full:
+      partition: "${SEQ_ALIGN_SLURM_PARTITION}"
+      memory: 16G
+      walltime: "12:00:00"
+      queries_per_job: 5
+      max_parallel: 10
+
+# ---------------------------------------------------------------------------
+# Acceptance gate. THESE VALUES DETERMINE WHAT COUNTS AS A RESULT.
+#
+# `min_speedup_fraction` must be justified against the measurement noise for
+# THIS configuration, not copied from another one. results/noise_floor_calibration.json
+# shows the gate statistic's spread at R = 1..6 pairs; a threshold below that
+# spread cannot distinguish a candidate from the baseline.
+#
+# `paired_current_best_repeats` re-measures the current best interleaved with the
+# candidate. With 0 the decision compares a fresh measurement against a cost
+# stored earlier, which charges run-to-run drift to the patch.
+# ---------------------------------------------------------------------------
+acceptance:
+  objective: speed_under_tp_fp_non_regression
+  accept_min_tp_fraction: 1.0     # TP must not decrease at all
+  max_fp: reference               # FP must not increase
+  min_speedup_fraction: 0.03
+  eval_repeats: 2
+  paired_current_best_repeats: 2  # set >= 2 before trusting any verdict to
+                                  # cancel timing drift; see README §5.2 and §11
+
+# ---------------------------------------------------------------------------
+# Loop shape.
+# ---------------------------------------------------------------------------
+loop:
+  outer_rounds: 3                 # serial algorithm directions
+  inner_trials: 3                 # implementation variants per direction
+  max_iter: 1
+  full_max_iter: 1

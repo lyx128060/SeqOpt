@@ -1,0 +1,11 @@
+{
+  "algorithm_family": "ssv_filter_strategy",
+  "component_name": "ssv_filter_neon",
+  "algorithm_change": "Add a bounded early-exit to the SSV filter band scan: when the running score bound proves the remaining bands cannot reach the reporting threshold, stop scanning and fall through to the stock path. The decision surface is the filter cascade pruning boundary, not a threshold value.",
+  "speed_mechanism": "pruning",
+  "quality_preservation_argument": "The bound is computed from the same score vectors the stock scan uses, so any band that could contain a hit still gets scanned; when the bound is inconclusive the code takes an exact fallback into the unmodified stock loop and suppresses nothing.",
+  "exact_fallback_strategy": "If the bound cannot be established for a target (short target, overflow in the score vector), re-run the stock scan for that target so recall is unchanged.",
+  "expected_metric_effect": "Full TP unchanged, FP unchanged, cost_s reduced on targets where the band scan dominates.",
+  "risk_notes": "A wrong bound would silently drop hits and reduce TP; the static contract check rejects edits outside the permitted functions, but the bound itself still needs the quality gate to catch a mistake.",
+  "_comment": "EXAMPLE ONLY. This is a well-formed outer proposal so the protocol can be exercised. It is not a validated optimization and no speedup is claimed for it."
+}

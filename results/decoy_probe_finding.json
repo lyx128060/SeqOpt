@@ -1,0 +1,97 @@
+{
+  "artifact": "decoy-probe verification: a patch that only adds work was accepted as faster",
+  "probe": {
+    "file": "impl_neon/ssvfilter.c",
+    "function": "p7_SSVFilter",
+    "what_it_does": "re-runs get_xE() and then busy-waits for k x (that scan time), k = 1.0. Return value and all score vectors are unchanged.",
+    "why_it_is_a_valid_decoy": "the patch strictly adds work to the timed region, so under any correct measurement it can only be slower; the proposal's own rationale says it 'changes *only* how long the stage takes'"
+  },
+  "verdict": {
+    "decision": "accepted_speedup_paired",
+    "original_decision": "accepted_speedup",
+    "median_pair_speedup_fraction": 0.040361,
+    "confirmed": true,
+    "paired_current_best_repeats": 5,
+    "eval_repeats": 2,
+    "min_speedup_fraction": 0.0,
+    "stage": "full",
+    "backend": "hmmer_cli_local",
+    "queries": 50,
+    "tp": 424,
+    "fp": 9
+  },
+  "interleaving": {
+    "roles_in_execution_order": [
+      "candidate",
+      "reference",
+      "reference",
+      "candidate",
+      "candidate",
+      "reference",
+      "reference",
+      "candidate",
+      "candidate",
+      "reference"
+    ],
+    "is_interleaved": true,
+    "note": "the protocol DID alternate candidate/reference, so this is not a block-ordering artefact"
+  },
+  "per_pair_ratios": {
+    "values": [
+      0.231381,
+      0.068415,
+      -0.13837,
+      -0.107619,
+      0.040361
+    ],
+    "median": 0.040361,
+    "stdev": 0.148998,
+    "min": -0.13837,
+    "max": 0.231381,
+    "sign_changes": 2
+  },
+  "within_arm_cost_spread": {
+    "candidate_cost_s": [
+      118.099,
+      118.164,
+      124.385,
+      125.633,
+      154.882
+    ],
+    "reference_cost_s": [
+      113.426,
+      126.772,
+      129.616,
+      136.056,
+      153.735
+    ],
+    "candidate": {
+      "min": 118.099,
+      "max": 154.882,
+      "range_fraction_of_min": 0.3115
+    },
+    "reference": {
+      "min": 113.426,
+      "max": 153.735,
+      "range_fraction_of_min": 0.3554
+    }
+  },
+  "comparison_against_calibration": {
+    "calibration_gate_sigma_at_R1": 0.026788,
+    "calibration_gate_sigma_at_R5": 0.006914,
+    "observed_pair_ratio_stdev_here": 0.148998,
+    "ratio_of_observed_to_calibration_at_R1": 5.56,
+    "interpretation": "the pair-to-pair spread measured in this verification run is far larger than the noise floor derived from the 25-query calibration, so the calibration does not transfer to this configuration as-is"
+  },
+  "status": "KNOWN LIMITATION, NOT A RESULT TO CLAIM",
+  "what_it_does_not_show": [
+    "it does not show how often this happens",
+    "it does not show that the paired-confirmation code is ineffective: the mechanism did run and did produce the paired decision it was designed to produce",
+    "it does not licence any claim of accuracy or speedup improvement"
+  ],
+  "suggested_follow_up": [
+    "re-run the zero-effect calibration on the exact configuration the verdict was taken in (50-query Full, same backend, same core allocation, same database)",
+    "raise paired_current_best_repeats and/or min_speedup_fraction above the measured noise, and re-test with the same decoy probe before trusting any accepted verdict",
+    "record the per-arm cost spread in the evaluation record so a wide spread can be flagged at decision time instead of after the fact"
+  ]
+}

@@ -1,0 +1,103 @@
+{
+  "artifact": "zero-effect noise-floor calibration",
+  "question": "How large is a pure-measurement 'speedup' when the candidate and the reference are the SAME binary?",
+  "protocol": {
+    "design": "arms A and B are the identical jackhmmer binary; a nonzero A/B ratio is therefore pure measurement noise",
+    "backend": "Slurm, one node, one job, arms alternate inside the job",
+    "query_cpus": 8,
+    "concurrency": 5,
+    "queries_per_pass": 25,
+    "max_iter": 1,
+    "passes": 12,
+    "note": "run on UniRef90; query set is the 25-query Full subset"
+  },
+  "pass_cost_s": {
+    "n": 12,
+    "min": 12826.427,
+    "median": 13176.819,
+    "max": 13801.332,
+    "stdev": 332.924,
+    "cv": 0.025126
+  },
+  "gate_statistic": {
+    "definition": "median over R adjacent A/B pair ratios (the statistic the acceptance threshold is compared against)",
+    "pairs_available": 6,
+    "sigma_by_pairs_R": {
+      "1": 0.026788,
+      "2": 0.017038,
+      "3": 0.017746,
+      "4": 0.011773,
+      "5": 0.006914,
+      "6": 0.0
+    },
+    "note": "R=6 is degenerate (only one distinct subset); treat R>=4 as extrapolated"
+  },
+  "measured_pair_ratios": {
+    "n": 6,
+    "values": [
+      -0.034038,
+      -0.008884,
+      0.025155,
+      0.004943,
+      0.039969,
+      -0.028147
+    ],
+    "median": -0.00197,
+    "stdev": 0.029272,
+    "min": -0.034038,
+    "max": 0.039969
+  },
+  "pooled_pair_ratios": {
+    "definition": "resampled pairs drawn ACROSS passes, so each ratio carries between-pass drift; describes a gate that does not cancel drift",
+    "n": 132,
+    "median": 0.0,
+    "mean": -0.000628,
+    "stdev": 0.035582,
+    "p01": -0.075291,
+    "p99": 0.06103,
+    "min": -0.076008,
+    "max": 0.070638
+  },
+  "recommendation_from_source_report": {
+    "min_pairs": 2,
+    "min_pairs_definition": "smallest R with 4.0 x sigma(median over R WITHIN-REPLICATE pairs) < the OLD threshold 0.1",
+    "threshold": 0.068152,
+    "threshold_definition": "max(4.0 x sigma=0.068152, empirical |median| p99=0.032562) at R=2",
+    "sigma_multiple": 4.0,
+    "sigma_at_chosen_pairs": 0.017038,
+    "per_query_cost_ratio_cap": 1.2401,
+    "per_query_cap_definition": "99.9th percentile of within-query (slowest / fastest) repeatability, over queries above the floor",
+    "per_query_absolute_floor_ms": 50.0,
+    "pairs_available": 6,
+    "complete_R": [
+      1,
+      2,
+      3
+    ],
+    "extrapolated_R": [
+      4,
+      5,
+      6
+    ],
+    "extrapolated_at_chosen_R": false,
+    "distinct_replicate_subsets_at_chosen_R": 15,
+    "low_diversity_at_chosen_R": true,
+    "per_R_distinct_subsets": {
+      "1": 6,
+      "2": 15,
+      "3": 20,
+      "4": 15,
+      "5": 6,
+      "6": 1
+    },
+    "pairing": "within-replicate adjacent A/B (one pair per replicate)",
+    "design_note": "the harness alternates the two arms inside one replicate, so one replicate IS one adjacent pair; this is the statistic the acceptance gate computes"
+  },
+  "recomputation": {
+    "performed_for_this_repository": true,
+    "authority": "results/ and this file were recomputed from zero_effect_raw.jsonl; the values agree with the stored report to 3 decimal places",
+    "pass_cost_stdev_recomputed": 332.924,
+    "pooled_ratio_stdev_recomputed": 0.035582,
+    "stored_pooled_ratio_stdev": 0.035447
+  }
+}
